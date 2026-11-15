@@ -1,0 +1,80 @@
+id,name,source
+MONDO_0000211,"striatal degeneration, autosomal dominant",descendant of EFO_1001050 multiple system atrophy
+MONDO_0003122,striatonigral degeneration,descendant of EFO_1001050 multiple system atrophy
+MONDO_0010080,familial infantile bilateral striatal necrosis,descendant of EFO_1001050 multiple system atrophy
+MONDO_0012205,autosomal dominant striatal neurodegeneration type 1,descendant of EFO_1001050 multiple system atrophy
+MONDO_0014835,"striatal degeneration, autosomal dominant 2",descendant of EFO_1001050 multiple system atrophy
+MONDO_0014889,"striatonigral degeneration, childhood-onset",descendant of EFO_1001050 multiple system atrophy
+MONDO_0016418,"multiple system atrophy, cerebellar type",descendant of EFO_1001050 multiple system atrophy
+EFO_1001870,late-onset Alzheimers disease,descendant of MONDO_0004975 Alzheimer disease
+MONDO_0007088,Alzheimer disease type 1,descendant of MONDO_0004975 Alzheimer disease
+MONDO_0011913,Alzheimer disease 3,descendant of MONDO_0004975 Alzheimer disease
+MONDO_0014265,Alzheimer disease 18,descendant of MONDO_0004975 Alzheimer disease
+MONDO_0015140,early-onset autosomal dominant Alzheimer disease,descendant of MONDO_0004975 Alzheimer disease
+MONDO_0100087,familial Alzheimer disease,descendant of MONDO_0004975 Alzheimer disease
+EFO_0001356,familial amyotrophic lateral sclerosis,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+EFO_0001357,sporadic amyotrophic lateral sclerosis,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+EFO_0022918,"amyotrophic lateral sclerosis, dominant",descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0007105,frontotemporal dementia and/or amyotrophic lateral sclerosis 1,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0008458,spinocerebellar ataxia type 2,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0008780,"amyotrophic lateral sclerosis type 2, juvenile",descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0010459,amyotrophic lateral sclerosis type 15,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0011196,amyotrophic lateral sclerosis type 5,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0011223,amyotrophic lateral sclerosis type 4,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0012077,amyotrophic lateral sclerosis type 8,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0012945,amyotrophic lateral sclerosis type 11,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0013501,frontotemporal dementia and/or amyotrophic lateral sclerosis 6,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0013891,amyotrophic lateral sclerosis type 18,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0014641,frontotemporal dementia and/or amyotrophic lateral sclerosis 4,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0017593,juvenile amyotrophic lateral sclerosis,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+MONDO_0030885,amyotrophic lateral sclerosis 26 with or without frontotemporal dementia,descendant of MONDO_0004976 amyotrophic lateral sclerosis
+EFO_0022609,"Parkinson disease, dominant",descendant of MONDO_0005180 Parkinson disease
+EFO_1001175,secondary Parkinson disease,descendant of MONDO_0005180 Parkinson disease
+EFO_1001402,postencephalitic Parkinson disease,descendant of MONDO_0005180 Parkinson disease
+MONDO_0000828,juvenile-onset Parkinson disease,descendant of MONDO_0005180 Parkinson disease
+MONDO_0008199,late-onset Parkinson disease,descendant of MONDO_0005180 Parkinson disease
+MONDO_0009830,parkinsonian-pyramidal syndrome,descendant of MONDO_0005180 Parkinson disease
+MONDO_0010796,"Parkinson disease, mitochondrial",descendant of MONDO_0005180 Parkinson disease
+MONDO_0011706,Kufor-Rakeb syndrome,descendant of MONDO_0005180 Parkinson disease
+MONDO_0013060,autosomal recessive Parkinson disease 14,descendant of MONDO_0005180 Parkinson disease
+MONDO_0017279,young-onset Parkinson disease,descendant of MONDO_0005180 Parkinson disease
+MONDO_0017809,parkinsonism due to ATP13A2 deficiency,descendant of MONDO_0005180 Parkinson disease
+MONDO_0800369,"parkinson disease 19B, early-onset",descendant of MONDO_0005180 Parkinson disease
+MONDO_0957576,"parkinson disease 25, autosomal recessive early-onset, with impaired intellectual development",descendant of MONDO_0005180 Parkinson disease
+Orphanet_2828,Young adult-onset Parkinsonism,descendant of MONDO_0005180 Parkinson disease
+Orphanet_411602,Hereditary late-onset Parkinson disease,descendant of MONDO_0005180 Parkinson disease
+EFO_0003840,chronic progressive multiple sclerosis,descendant of MONDO_0005301 multiple sclerosis
+EFO_0003929,relapsing-remitting multiple sclerosis,descendant of MONDO_0005301 multiple sclerosis
+EFO_0004256,neuromyelitis optica,descendant of MONDO_0005301 multiple sclerosis
+EFO_0008520,primary progressive multiple sclerosis,descendant of MONDO_0005301 multiple sclerosis
+EFO_0008522,secondary progressive multiple sclerosis,descendant of MONDO_0005301 multiple sclerosis
+EFO_0009584,AQP4-IgG-positive neuromyelitis optica,descendant of MONDO_0005301 multiple sclerosis
+EFO_0009585,AQP4-IgG-negative neuromyelitis optica,descendant of MONDO_0005301 multiple sclerosis
+MONDO_0016621,juvenile Huntington disease,descendant of MONDO_0007739 Huntington disease
+EFO_0003096,Pick disease,descendant of MONDO_0017276 frontotemporal dementia
+MONDO_0000507,inclusion body myopathy with Paget disease of bone and frontotemporal dementia,descendant of MONDO_0017276 frontotemporal dementia
+MONDO_0008178,inclusion body myopathy with Paget disease of bone and frontotemporal dementia type 1,descendant of MONDO_0017276 frontotemporal dementia
+MONDO_0010857,semantic dementia,descendant of MONDO_0017276 frontotemporal dementia
+MONDO_0011842,GRN-related frontotemporal lobar degeneration with Tdp43 inclusions,descendant of MONDO_0017276 frontotemporal dementia
+MONDO_0015059,progressive non-fluent aphasia,descendant of MONDO_0017276 frontotemporal dementia
+MONDO_0017160,behavioral variant of frontotemporal dementia,descendant of MONDO_0017276 frontotemporal dementia
+MONDO_0017399,"frontotemporal dementia, right temporal atrophy variant",descendant of MONDO_0017276 frontotemporal dementia
+MONDO_0850514,inclusion body myopathy and brain white matter abnormalities,descendant of MONDO_0017276 frontotemporal dementia
+EFO_0700069,inherited prion disease,descendant of MONDO_0018926 human prion disease
+EFO_1001008,kuru,descendant of MONDO_0018926 human prion disease
+MONDO_0009839,progressive supranuclear palsy-parkinsonism syndrome,descendant of MONDO_0019037 progressive supranuclear palsy
+MONDO_0010997,"supranuclear palsy, progressive, 1",descendant of MONDO_0019037 progressive supranuclear palsy
+MONDO_0016562,progressive supranuclear palsy-pure akinesia with gait freezing syndrome,descendant of MONDO_0019037 progressive supranuclear palsy
+MONDO_0016563,progressive supranuclear palsy-corticobasal syndrome,descendant of MONDO_0019037 progressive supranuclear palsy
+MONDO_0016564,progressive supranuclear palsy-progressive non-fluent aphasia syndrome,descendant of MONDO_0019037 progressive supranuclear palsy
+MONDO_0020488,atypical progressive supranuclear palsy syndrome,descendant of MONDO_0019037 progressive supranuclear palsy
+EFO_0006792,Lewy body dementia,root
+EFO_1001050,multiple system atrophy,root
+MONDO_0004975,Alzheimer disease,root
+MONDO_0004976,amyotrophic lateral sclerosis,root
+MONDO_0005180,Parkinson disease,root
+MONDO_0005301,multiple sclerosis,root
+MONDO_0007739,Huntington disease,root
+MONDO_0017276,frontotemporal dementia,root
+MONDO_0018926,human prion disease,root
+MONDO_0019037,progressive supranuclear palsy,root
