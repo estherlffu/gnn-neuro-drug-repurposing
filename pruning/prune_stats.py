@@ -9,13 +9,20 @@ p.add_argument("--max_deg", type=int, default=2000)
 p.add_argument("--exclude", nargs="*", default=["ANA-GEN"])
 args = p.parse_args()
 
-D = "/local/scratch/kkim636/.cache/optimuskg/doi_10_7910_DVN_IYNGEV/3.2/"
-n = pl.read_parquet(D + "largest_connected_component_nodes.parquet")
+import os, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from okg_files import find_table
+n = pl.read_parquet(find_table(os.environ.get("OKG_DATA", "."), "nodes"))
 n = n.with_columns(pl.col("properties").str.json_path_match("$.name").alias("name"))
-n = n.join(pl.read_parquet("node_index.parquet").select("id", "nid"), on="id").sort("nid")
-d = torch.load("okg_split.pt")
+art = Path(os.environ.get("OKG_OUT", "artifacts"))
+node_index = art / "node_index.parquet" if (art / "node_index.parquet").exists() else Path("node_index.parquet")
+split_path = art / "okg_split.pt" if (art / "okg_split.pt").exists() else Path("okg_split.pt")
+rel_index = art / "rel_index.parquet" if (art / "rel_index.parquet").exists() else Path("rel_index.parquet")
+n = n.join(pl.read_parquet(node_index).select("id", "nid"), on="id").sort("nid")
+d = torch.load(split_path, weights_only=False)
 src, dst, rid, N = d["src"], d["dst"], d["rid"], d["num_nodes"]
-rels = pl.read_parquet("rel_index.parquet")
+rels = pl.read_parquet(rel_index)
 names = dict(zip(rels["rid"].to_list(), rels["rtype"].to_list()))
 
 tr = d["split"]["train"]

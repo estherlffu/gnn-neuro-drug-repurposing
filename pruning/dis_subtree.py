@@ -1,13 +1,18 @@
 import polars as pl, json, sys, collections, os
 from collections import deque
 pl.Config.set_fmt_str_lengths(55); pl.Config.set_tbl_rows(100); pl.Config.set_tbl_width_chars(170)
-D = "/local/scratch/kkim636/.cache/optimuskg/doi_10_7910_DVN_IYNGEV/3.2/"
-K = "/local/scratch/kkim636/keep/"
+import os, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from okg_files import find_table
+DATA = Path(os.environ.get("OKG_DATA", "."))
+NODES, EDGES = find_table(DATA, "nodes"), find_table(DATA, "edges")
+K = os.environ.get("OKG_KEEP", "keep/")
 ROOTS = sys.argv[1:] or ["EFO_0020092", "MONDO_0002977", "MONDO_0019956"]
-n = pl.read_parquet(D + "largest_connected_component_nodes.parquet").filter(pl.col("label") == "DIS")
+n = pl.read_parquet(NODES).filter(pl.col("label") == "DIS")
 P = {i: json.loads(p) for i, p in zip(n["id"], n["properties"])}
 name = {i: p.get("name") for i, p in P.items()}
-E = pl.scan_parquet(D + "largest_connected_component_edges.parquet")
+E = pl.scan_parquet(EDGES)
 par = E.filter((pl.col("label") == "DIS-DIS") & (pl.col("relation") == "PARENT")).select("from", "to").collect()
 ch = collections.defaultdict(list)
 for a, b in zip(par["from"], par["to"]):

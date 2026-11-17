@@ -1,19 +1,24 @@
-import torch, polars as pl, argparse
+import torch, polars as pl, argparse, sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from okg_files import find_table
 
 p = argparse.ArgumentParser()
 p.add_argument("--keep", nargs="*", default=[])
 p.add_argument("--cap", type=int, default=2000)
-p.add_argument("--k", type=int, default=50)
-p.add_argument("--out", default="/local/scratch/kkim636/evalset.pt")
+p.add_argument("--k", type=int, default=100)
+p.add_argument("--split", default="artifacts/okg_split.pt")
+p.add_argument("--data_dir", default=".")
+p.add_argument("--out", default="artifacts/evalset.pt")
 args = p.parse_args()
 
-O = "/local/scratch/kkim636/"
-D = O + ".cache/optimuskg/doi_10_7910_DVN_IYNGEV/3.2/"
-d = torch.load(O + "okg_split.pt")
+d = torch.load(args.split, weights_only=False)
 src, dst, rid = d["src"], d["dst"], d["rid"]
 N, R, T = d["num_nodes"], d["num_rels"], d["num_ntypes"]
 node_type = d["node_type"]
-idx = pl.read_parquet(O + "node_index.parquet").select("id", "nid")
+idx_path = Path(args.split).parent / "node_index.parquet"
+idx = pl.read_parquet(idx_path).select("id", "nid")
 
 def to_mask(nids):
     m = torch.zeros(N, dtype=torch.bool)
@@ -26,11 +31,14 @@ for f in args.keep:
     U &= to_mask(idx.join(ids, on="id")["nid"].to_numpy())
 print("common universe U:", int(U.sum()), "nodes")
 
-nodes = pl.read_parquet(D + "largest_connected_component_nodes.parquet").join(idx, on="id")
-is_neuro = to_mask(nodes.filter((pl.col("label") == "DIS") &
-                                pl.col("properties").str.contains("EFO_0000618"))["nid"].to_numpy())
+if "is_neuro" in d:
+    is_neuro = d["is_neuro"].bool()
+else:
+    nodes = pl.read_parquet(find_table(args.data_dir, "nodes")).join(idx, on="id")
+    is_neuro = to_mask(nodes.filter((pl.col("label") == "DIS") &
+                                    pl.col("properties").str.contains("EFO_0000618|EFO:0000618"))["nid"].to_numpy())
 
-rels = pl.read_parquet(O + "rel_index.parquet")
+rels = pl.read_parquet(Path(args.split).parent / "rel_index.parquet")
 ind_rid = rels.filter(pl.col("rtype") == "DRG-DIS|INDICATION")["rid"][0]
 
 all_keys = (src * N + dst) * R + rid     # known true edges (for filtered negatives)

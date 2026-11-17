@@ -1,7 +1,12 @@
 import polars as pl, json, collections
 pl.Config.set_fmt_str_lengths(60); pl.Config.set_tbl_rows(40); pl.Config.set_tbl_width_chars(150)
-D = "/local/scratch/kkim636/.cache/optimuskg/doi_10_7910_DVN_IYNGEV/3.2/"
-K = "/local/scratch/kkim636/keep/"
+import os, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from okg_files import find_table
+DATA = Path(os.environ.get("OKG_DATA", "."))
+NODES, EDGES = find_table(DATA, "nodes"), find_table(DATA, "edges")
+K = os.environ.get("OKG_KEEP", "keep/")
 ROOTS = ["MONDO_0004975",  # Alzheimer disease
          "MONDO_0005180",  # Parkinson disease
          "MONDO_0004976",  # amyotrophic lateral sclerosis
@@ -12,12 +17,12 @@ ROOTS = ["MONDO_0004975",  # Alzheimer disease
          "EFO_1001050",    # multiple system atrophy
          "MONDO_0019037",  # progressive supranuclear palsy
          "MONDO_0018926"]  # human prion disease
-n = pl.read_parquet(D + "largest_connected_component_nodes.parquet").filter(pl.col("label") == "DIS")
+n = pl.read_parquet(NODES).filter(pl.col("label") == "DIS")
 name = {i: json.loads(p).get("name") for i, p in zip(n["id"], n["properties"])}
 miss = [r for r in ROOTS if r not in name]
 assert not miss, f"roots not in graph: {miss}"
 
-E = pl.scan_parquet(D + "largest_connected_component_edges.parquet")
+E = pl.scan_parquet(EDGES)
 par = E.filter((pl.col("label") == "DIS-DIS") & (pl.col("relation") == "PARENT")).select("from", "to").collect()
 ch = collections.defaultdict(list)
 for a, b in zip(par["from"], par["to"]):

@@ -5,19 +5,16 @@
 #SBATCH --mem=48GB
 #SBATCH --time=02:00:00
 
-source /local/scratch/kkim636/miniconda3/etc/profile.d/conda.sh
-conda activate kg
-cd /local/scratch/kkim636
+# Builds the seed-pruned graph from nodes.parquet + edges.parquet.
+# DATA_DIR is the directory that contains those two files.
+if [ -f /local/scratch/kkim636/miniconda3/etc/profile.d/conda.sh ]; then
+  source /local/scratch/kkim636/miniconda3/etc/profile.d/conda.sh
+  conda activate kg
+elif [ -n "${CONDA_SH:-}" ]; then
+  source "$CONDA_SH"
+  conda activate "${CONDA_ENV:-kg}"
+fi
 
-# keep the old split once (prep.py refuses to overwrite okg_split.pt)
-[ -f okg_split_v1.pt ] || mv okg_split.pt okg_split_v1.pt
-
-python -u prep.py || exit 1
-cat split_report.csv
-
-mkdir -p keep keep_v1
-mv keep/keep_nodes_*.parquet keep_nodes_core_h1*.parquet keep_v1/ 2>/dev/null
-
-python -u prune_stats.py --tier core --hops 3 \
-  --disease_list keep/seed_diseases_neurodeg.csv --tag _neurodeg
-python -u prune_stats.py --tier core --hops 2 --tag _geneonly
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+python -u rgcn/prep.py --data_dir "${DATA_DIR:-.}" --out_dir "${OUT_DIR:-artifacts}" --force

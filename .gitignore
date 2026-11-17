@@ -5,6 +5,7 @@
 *.log
 out_*
 __pycache__/
+artifacts/
 .cache/
 meta.json
 !rgcn/keep/*.parquet
