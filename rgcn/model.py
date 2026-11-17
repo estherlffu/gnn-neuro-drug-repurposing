@@ -1,168 +1,378 @@
-"""R-GCN encoder and drug–disease scoring.
+"""Score held-out drug–disease edges from the rest of the graph.
 
-The previous trainer sampled a 10-then-5 neighborhood out of a ~22M-edge graph
-and spent almost all of its loss on relations other than DRG-DIS|INDICATION.
-Indication edges are about 0.3% of OptimusKG, so that model ranks at chance
-(AUPRC below 0.1).
+A drug–disease indication is held out of the features. The score is how
+specifically the drug and the disease share genes, a gene's neighbor, a
+pathway, a biological process, or a phenotype. Common hubs count less than
+a bridge that only a few diseases touch.
 
-This encoder runs on the whole message-passing graph. Drug–disease edges are
-not in that graph: the indication has to come from drug–gene–disease (and
-phenotype / pathway) paths. Relation weights start as the identity, and the
-score reads the 1-hop layer first, so two nodes that share a gene are already
-closer than a random pair before any training.
+Averaging those neighbors into one embedding washes the shared gene out:
+a disease with thousands of genes becomes a blur, and the true disease never
+reaches the top of the list.
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-class RelConv(nn.Module):
-    """Relational graph convolution with per-relation mean aggregation.
+def unique_pairs(nodes, bridges):
+    if nodes.numel() == 0:
+        return nodes.long(), bridges.long()
+    packed = torch.stack([nodes.long(), bridges.long()], 1)
+    packed = torch.unique(packed, dim=0)
+    return packed[:, 0].contiguous(), packed[:, 1].contiguous()
 
-    `num_bases` below `num_rels` uses the basis decomposition from the R-GCN
-    paper. `num_bases == 0` keeps a full matrix per relation, which trains
-    more reliably on the few dozen relations left after pruning.
-    """
 
-    def __init__(self, in_dim, out_dim, num_rels, num_bases=0):
+def cap_per_node(nodes, bridges, bridge_score, k):
+    """Keep the k highest-scoring bridges for each node."""
+    nodes, bridges = unique_pairs(nodes, bridges)
+    if nodes.numel() == 0 or k <= 0:
+        return nodes[:0], bridges[:0]
+    score = bridge_score[bridges]
+    order = torch.argsort(score, descending=True, stable=True)
+    nodes, bridges = nodes[order], bridges[order]
+    order = torch.argsort(nodes, stable=True)
+    nodes, bridges = nodes[order], bridges[order]
+    change = torch.ones(nodes.shape[0], dtype=torch.bool)
+    if nodes.shape[0] > 1:
+        change[1:] = nodes[1:] != nodes[:-1]
+    idx = torch.arange(nodes.shape[0])
+    starts = torch.cummax(torch.where(change, idx, torch.zeros_like(idx)), 0)[0]
+    keep = (idx - starts) < k
+    return nodes[keep], bridges[keep]
+
+
+def orient(src, dst, node_type, type_a, type_b):
+    """Return endpoints as (type_a, type_b), whichever way the edge was stored."""
+    if src.numel() == 0:
+        return src.long(), dst.long()
+    forward = (node_type[src] == type_a) & (node_type[dst] == type_b)
+    backward = (node_type[src] == type_b) & (node_type[dst] == type_a)
+    take = forward | backward
+    s, d = src[take], dst[take]
+    left_a = node_type[s] == type_a
+    return torch.where(left_a, s, d).long(), torch.where(left_a, d, s).long()
+
+
+def both_ways(src, dst, node_type, type_a):
+    if src.numel() == 0:
+        return src.long(), dst.long()
+    take = (node_type[src] == type_a) & (node_type[dst] == type_a) & (src != dst)
+    s, d = src[take], dst[take]
+    return torch.cat([s, d]).long(), torch.cat([d, s]).long()
+
+
+def take_label(src, dst, rid, pool, label_ok):
+    empty = torch.empty(0, dtype=torch.long)
+    if pool.numel() == 0 or not bool(label_ok.any()):
+        return empty, empty
+    s, d, r = src[pool], dst[pool], rid[pool]
+    keep = label_ok[r]
+    return s[keep].long(), d[keep].long()
+
+
+def label_masks(rel_names):
+    labels = [name.split("|", 1)[0] for name in rel_names]
+    wanted = (
+        "DRG-GEN", "DIS-GEN", "GEN-GEN", "DRG-PHE", "DIS-PHE",
+        "PHE-GEN", "PWY-GEN", "BPO-GEN",
+    )
+    return {name: torch.tensor([lab == name for lab in labels], dtype=torch.bool) for name in wanted}
+
+
+def neighbor_table(src, dst, n_nodes, cap, bridge_score):
+    src, dst = cap_per_node(src, dst, bridge_score, cap)
+    table = torch.full((n_nodes, cap), -1, dtype=torch.long)
+    if src.numel() == 0:
+        return table
+    order = torch.argsort(src, stable=True)
+    src, dst = src[order], dst[order]
+    change = torch.ones(src.shape[0], dtype=torch.bool)
+    if src.shape[0] > 1:
+        change[1:] = src[1:] != src[:-1]
+    idx = torch.arange(src.shape[0])
+    starts = torch.cummax(torch.where(change, idx, torch.zeros_like(idx)), 0)[0]
+    rank = idx - starts
+    ok = rank < cap
+    table[src[ok], rank[ok]] = dst[ok]
+    return table
+
+
+def expand(nodes, keys, table):
+    empty = torch.empty(0, dtype=torch.long)
+    if nodes.numel() == 0:
+        return empty, empty
+    picked = table[keys]
+    ok = picked >= 0
+    if not bool(ok.any()):
+        return empty, empty
+    return nodes.unsqueeze(1).expand_as(picked)[ok].long(), picked[ok].long()
+
+
+def drop_pairs(nodes, bridges, drop_nodes, drop_bridges):
+    """Remove pairs that also appear in the second list."""
+    if nodes.numel() == 0 or drop_nodes.numel() == 0:
+        return nodes.long(), bridges.long()
+    width = int(torch.maximum(bridges.max(), drop_bridges.max())) + 1
+    drop_key = torch.unique(drop_nodes.long() * width + drop_bridges.long())
+    key = nodes.long() * width + bridges.long()
+    pos = torch.searchsorted(drop_key, key)
+    pos_c = pos.clamp(max=drop_key.numel() - 1)
+    hit = (pos < drop_key.numel()) & (drop_key[pos_c] == key)
+    return nodes[~hit].long(), bridges[~hit].long()
+
+
+class OverlapChannel(nn.Module):
+    """Weighted count of shared bridges. One shared bridge adds its idf."""
+
+    def __init__(self, name, drug_node, drug_bridge, dis_row, dis_bridge, idf, n_nodes, n_dis):
         super().__init__()
-        self.in_dim = in_dim
-        self.out_dim = out_dim
-        self.num_rels = num_rels
-        self.root = nn.Linear(in_dim, out_dim, bias=False)
-        self.bias = nn.Parameter(torch.zeros(out_dim))
-        use_basis = num_bases and num_bases < num_rels
-        if use_basis:
-            self.basis = nn.Parameter(torch.empty(num_bases, in_dim, out_dim))
-            self.comb = nn.Parameter(torch.empty(num_rels, num_bases))
-            self.weight = None
-        else:
-            self.basis = None
-            self.comb = None
-            self.weight = nn.Parameter(torch.empty(num_rels, in_dim, out_dim))
-        self.reset_parameters()
+        self.name = name
+        self.n_nodes = int(n_nodes)
+        self.n_bridge = int(idf.numel())
+        self.n_dis = int(n_dis)
+        self.register_buffer("drug_node", drug_node.long(), persistent=False)
+        self.register_buffer("drug_bridge", drug_bridge.long(), persistent=False)
+        order = torch.argsort(dis_bridge.long())
+        self.register_buffer("rows_sorted", dis_row.long()[order], persistent=False)
+        bridges_sorted = dis_bridge.long()[order]
+        counts = torch.bincount(bridges_sorted, minlength=self.n_bridge)
+        starts = torch.cumsum(counts, 0) - counts
+        self.register_buffer("counts", counts.long(), persistent=False)
+        self.register_buffer("starts", starts.long(), persistent=False)
+        self.register_buffer("idf", idf.float())
+        self.register_buffer("unit", idf.mean().clamp(min=1e-3).float())
+        # 0 => each bridge starts at its idf. Training can turn a noisy bridge down.
+        self.logit = nn.Parameter(torch.zeros(self.n_bridge))
 
-    def reset_parameters(self):
-        # Identity messages: a node starts as itself plus the mean of its
-        # neighbors, so a shared gene is visible to the decoder immediately.
-        eye = None
-        if self.in_dim == self.out_dim:
-            eye = torch.eye(self.in_dim)
-        if self.weight is not None:
-            nn.init.zeros_(self.weight)
-            if eye is not None:
-                for r in range(self.num_rels):
-                    self.weight.data[r].copy_(eye)
-            else:
-                nn.init.xavier_uniform_(self.weight)
-        else:
-            nn.init.zeros_(self.basis)
-            nn.init.zeros_(self.comb)
-            if eye is not None:
-                self.basis.data[0].copy_(eye)
-                self.comb.data[:, 0] = 1
-            else:
-                nn.init.xavier_uniform_(self.basis)
-                nn.init.xavier_uniform_(self.comb)
-        nn.init.zeros_(self.root.weight)
-        if eye is not None:
-            self.root.weight.data.copy_(0.1 * eye)
-        else:
-            nn.init.xavier_uniform_(self.root.weight)
-        nn.init.zeros_(self.bias)
+    def bridge_weight(self):
+        return self.idf * torch.exp(self.logit.clamp(-3.0, 2.0)) / self.unit
 
-    def _matrix(self, rel):
-        if self.weight is not None:
-            return self.weight[rel]
-        return torch.einsum("b,bio->io", self.comb[rel], self.basis)
+    def score(self, heads):
+        if heads.numel() == 0:
+            return torch.zeros(0, self.n_dis, device=heads.device)
+        if heads.numel() > 128:
+            parts = [self._score_chunk(heads[i:i + 128]) for i in range(0, heads.numel(), 128)]
+            return torch.cat(parts, 0)
+        return self._score_chunk(heads)
 
-    def forward(self, x, edge_index, edge_type):
-        src, dst = edge_index
-        out = self.root(x) + self.bias
-        if src.numel() == 0:
-            return out
-        n = x.size(0)
-        flat = edge_type * n + dst
-        counts = torch.zeros(self.num_rels * n, device=x.device, dtype=x.dtype)
-        counts.index_add_(0, flat, torch.ones(src.numel(), device=x.device, dtype=x.dtype))
-        norm = counts[flat].clamp(min=1).unsqueeze(1)
-        acc = torch.zeros(n, self.out_dim, device=x.device, dtype=x.dtype)
-        for rel in torch.unique(edge_type).tolist():
-            take = edge_type == rel
-            msg = (x[src[take]] @ self._matrix(rel)) / norm[take]
-            acc = acc.index_add(0, dst[take], msg)
-        return out + acc
+    def _score_chunk(self, heads):
+        device = heads.device
+        uniq, inv = torch.unique(heads, return_inverse=True)
+        blank = torch.zeros(uniq.numel(), self.n_dis, device=device)
+        if self.drug_node.numel() == 0 or self.rows_sorted.numel() == 0:
+            return blank[inv]
+        lookup = torch.full((self.n_nodes,), -1, dtype=torch.long, device=device)
+        lookup[uniq] = torch.arange(uniq.numel(), device=device)
+        pos = lookup[self.drug_node]
+        hit = pos >= 0
+        if not bool(hit.any()):
+            return blank[inv]
+        u = pos[hit]
+        g = self.drug_bridge[hit]
+        deg = self.counts[g]
+        keep = deg > 0
+        if not bool(keep.any()):
+            return blank[inv]
+        u, g, deg = u[keep], g[keep], deg[keep]
+        w = self.bridge_weight()
+        # One scatter stays small enough to backprop through. Split if a chunk
+        # of drug edges fans out to more than a million disease links.
+        pieces = []
+        start = 0
+        limit = 1_000_000
+        while start < u.numel():
+            csum = torch.cumsum(deg[start:], 0)
+            n_fit = int((csum <= limit).sum().item())
+            n_fit = max(n_fit, 1)
+            sl = slice(start, start + n_fit)
+            pieces.append(self._scatter(uniq.numel(), u[sl], g[sl], deg[sl], w))
+            start += n_fit
+        full = pieces[0] if len(pieces) == 1 else torch.stack(pieces, 0).sum(0)
+        return full[inv]
+
+    def _scatter(self, n_uniq, u, g, deg, w):
+        total = int(deg.sum().item())
+        flat = torch.zeros(n_uniq * self.n_dis, device=u.device)
+        if total == 0:
+            return flat.view(n_uniq, self.n_dis)
+        u_rep = u.repeat_interleave(deg)
+        g_rep = g.repeat_interleave(deg)
+        group = (torch.cumsum(deg, 0) - deg).repeat_interleave(deg)
+        within = torch.arange(total, device=u.device) - group
+        rows = self.rows_sorted[self.starts[g].repeat_interleave(deg) + within]
+        idx = u_rep.long() * self.n_dis + rows.long()
+        flat = flat.scatter_add(0, idx, w[g_rep])
+        return flat.view(n_uniq, self.n_dis)
 
 
-class RGCN(nn.Module):
-    def __init__(self, n_nodes, n_rels, n_types, dim=128, n_layers=2, dropout=0.1, n_bases=0):
+class PathRanker(nn.Module):
+    """Sum of overlap channels. The gene channel starts as the whole score."""
+
+    def __init__(self, channels, dis_ids):
         super().__init__()
-        self.n_rels = n_rels
-        self.n_layers = n_layers
-        self.emb = nn.Embedding(n_nodes, dim)
-        self.type_emb = nn.Embedding(n_types, dim)
-        self.convs = nn.ModuleList(
-            RelConv(dim, dim, 2 * n_rels, n_bases) for _ in range(n_layers)
+        if not channels:
+            raise SystemExit(
+                "no overlap features: the training graph never connects a drug and a "
+                "disease through a gene, pathway, or phenotype"
+            )
+        self.channels = nn.ModuleList(channels)
+        # softplus(-6) ≈ 0.0025. Enough to break an exact tie, not enough to
+        # outvote one shared gene. Training can raise a channel that helps.
+        init = torch.full((len(channels),), -6.0)
+        for i, channel in enumerate(channels):
+            if channel.name == "gene":
+                init[i] = 0.55  # softplus(0.55) ≈ 1
+        self.mix = nn.Parameter(init)
+        self.register_buffer("dis_ids", dis_ids.long())
+
+    def score_candidates(self, heads, candidates):
+        weights = F.softplus(self.mix)
+        parts = torch.stack([channel.score(heads) for channel in self.channels], 0)
+        total = torch.einsum("c,cbd->bd", weights, parts)
+        if candidates.data_ptr() == self.dis_ids.data_ptr():
+            return total
+        if candidates.numel() == self.dis_ids.numel() and torch.equal(candidates, self.dis_ids):
+            return total
+        pos = torch.searchsorted(self.dis_ids, candidates)
+        return total.index_select(1, pos)
+
+
+def _type(type_names, name):
+    try:
+        return type_names.index(name)
+    except ValueError:
+        return None
+
+
+def make_channel(name, nodes, bridges, dis_ids, n_nodes):
+    nodes, bridges = unique_pairs(nodes, bridges)
+    if nodes.numel() == 0 or dis_ids.numel() == 0:
+        return None
+    if nodes.numel() > 3_000_000:
+        print(f"channel {name}: capping {nodes.numel():,} links to 64 per node", flush=True)
+        width = int(bridges.max()) + 1
+        nodes, bridges = cap_per_node(nodes, bridges, torch.ones(width), 64)
+    uniq, local = torch.unique(bridges, return_inverse=True)
+    row = torch.searchsorted(dis_ids, nodes)
+    in_range = row < dis_ids.numel()
+    row_c = row.clamp(max=dis_ids.numel() - 1)
+    is_dis = in_range & (dis_ids[row_c] == nodes)
+    if int(is_dis.sum()) == 0 or int((~is_dis).sum()) == 0:
+        return None
+    pairs = torch.unique(torch.stack([row_c[is_dis], local[is_dis]], 1), dim=0)
+    df = torch.bincount(pairs[:, 1], minlength=uniq.numel()).float()
+    idf = 1.0 / torch.log(2.0 + df)
+    print(
+        f"channel {name}: {int((~is_dis).sum()):,} drug-side links, "
+        f"{int(is_dis.sum()):,} disease-side links, {uniq.numel():,} bridges",
+        flush=True,
+    )
+    return OverlapChannel(
+        name,
+        nodes[~is_dis], local[~is_dis],
+        pairs[:, 0], pairs[:, 1],
+        idf, n_nodes, dis_ids.numel(),
+    )
+
+
+def _reach(name, drug_n, drug_g, dis_n, dis_g, raw_s, raw_d, node_type, gene_t, term_t, n_nodes, dis_ids, cap):
+    genes, terms = orient(raw_s, raw_d, node_type, gene_t, term_t)
+    if genes.numel() == 0 or drug_n.numel() == 0 or dis_n.numel() == 0:
+        return None
+    specificity = 1.0 / torch.bincount(terms, minlength=n_nodes).float().clamp(min=1)
+    table = neighbor_table(genes, terms, n_nodes, cap, specificity)
+    reached_drug, drug_term = expand(drug_n, drug_g, table)
+    reached_dis, dis_term = expand(dis_n, dis_g, table)
+    if reached_drug.numel() == 0 or reached_dis.numel() == 0:
+        return None
+    return make_channel(
+        name,
+        torch.cat([reached_drug, reached_dis]),
+        torch.cat([drug_term, dis_term]),
+        dis_ids, n_nodes,
+    )
+
+
+def build_overlap_channels(src, dst, rid, pool, node_type, type_names, rel_names, dis_ids, n_nodes):
+    """Channels from training edges. `pool` must not contain held-out indications."""
+    print("building overlap channels from the training graph", flush=True)
+    drug_t, dis_t, gene_t = _type(type_names, "DRG"), _type(type_names, "DIS"), _type(type_names, "GEN")
+    if drug_t is None or dis_t is None or gene_t is None:
+        raise SystemExit(f"node types must include DRG, DIS, and GEN, found {type_names}")
+    masks = label_masks(rel_names)
+    drug_n, drug_g = orient(*take_label(src, dst, rid, pool, masks["DRG-GEN"]), node_type, drug_t, gene_t)
+    dis_n, dis_g = orient(*take_label(src, dst, rid, pool, masks["DIS-GEN"]), node_type, dis_t, gene_t)
+    channels = []
+    gene = make_channel(
+        "gene",
+        torch.cat([drug_n, dis_n]),
+        torch.cat([drug_g, dis_g]),
+        dis_ids, n_nodes,
+    )
+    if gene is not None:
+        channels.append(gene)
+
+    gg_s, gg_d = take_label(src, dst, rid, pool, masks["GEN-GEN"])
+    gg_a, gg_b = both_ways(gg_s, gg_d, node_type, gene_t)
+    if gg_a.numel() and drug_n.numel() and dis_n.numel():
+        specificity = 1.0 / torch.bincount(gg_a, minlength=n_nodes).float().clamp(min=1)
+        table = neighbor_table(gg_a, gg_b, n_nodes, 16, specificity)
+        hop_n, hop_g = expand(drug_n, drug_g, table)
+        hop_n, hop_g = drop_pairs(hop_n, hop_g, drug_n, drug_g)
+        if hop_n.numel():
+            two = make_channel(
+                "gene2",
+                torch.cat([hop_n, dis_n]),
+                torch.cat([hop_g, dis_g]),
+                dis_ids, n_nodes,
+            )
+            if two is not None:
+                channels.append(two)
+
+    for name, label, term_name, cap in (
+        ("pathway", "PWY-GEN", "PWY", 32),
+        ("process", "BPO-GEN", "BPO", 32),
+    ):
+        term_t = _type(type_names, term_name)
+        if term_t is None:
+            continue
+        raw_s, raw_d = take_label(src, dst, rid, pool, masks[label])
+        reached = _reach(
+            name, drug_n, drug_g, dis_n, dis_g, raw_s, raw_d,
+            node_type, gene_t, term_t, n_nodes, dis_ids, cap,
         )
-        self.norms = nn.ModuleList(nn.LayerNorm(dim) for _ in range(n_layers))
-        self.proj = nn.Linear(dim * (n_layers + 1), dim)
-        self.final = nn.LayerNorm(dim)
-        self.drop = nn.Dropout(dropout)
-        self.rel = nn.Parameter(torch.empty(n_rels, dim))
-        self.reset_parameters()
+        if reached is not None:
+            channels.append(reached)
 
-    def reset_parameters(self):
-        nn.init.normal_(self.emb.weight, std=0.1)
-        nn.init.zeros_(self.type_emb.weight)
-        nn.init.ones_(self.rel)
-        # Start from the 1-hop representation. That is the drug/gene and
-        # disease/gene aggregate, i.e. the shared-target signal.
-        nn.init.zeros_(self.proj.weight)
-        nn.init.zeros_(self.proj.bias)
-        dim = self.rel.shape[1]
-        eye = torch.eye(dim)
-        with torch.no_grad():
-            # 1-hop neighborhood is the drug/gene and disease/gene signal.
-            # A little of the 2-hop state is mixed in so pathway hops can count.
-            self.proj.weight[:, dim:2 * dim].copy_(eye)
-            if self.n_layers >= 2:
-                self.proj.weight[:, 2 * dim:3 * dim].copy_(0.25 * eye)
+    phe_t = _type(type_names, "PHE")
+    if phe_t is not None:
+        phe_nodes, phe_bridges = [], []
+        for label, owner in (("DRG-PHE", drug_t), ("DIS-PHE", dis_t)):
+            raw_s, raw_d = take_label(src, dst, rid, pool, masks[label])
+            owner_n, phe = orient(raw_s, raw_d, node_type, owner, phe_t)
+            if owner_n.numel():
+                phe_nodes.append(owner_n)
+                phe_bridges.append(phe)
+        raw_s, raw_d = take_label(src, dst, rid, pool, masks["PHE-GEN"])
+        genes, phenos = orient(raw_s, raw_d, node_type, gene_t, phe_t)
+        if genes.numel() and drug_n.numel() and dis_n.numel():
+            specificity = 1.0 / torch.bincount(phenos, minlength=n_nodes).float().clamp(min=1)
+            table = neighbor_table(genes, phenos, n_nodes, 32, specificity)
+            for owners, keys in ((drug_n, drug_g), (dis_n, dis_g)):
+                reached_n, reached_b = expand(owners, keys, table)
+                if reached_n.numel():
+                    phe_nodes.append(reached_n)
+                    phe_bridges.append(reached_b)
+        if phe_nodes:
+            pheno = make_channel(
+                "pheno", torch.cat(phe_nodes), torch.cat(phe_bridges), dis_ids, n_nodes,
+            )
+            if pheno is not None:
+                channels.append(pheno)
 
-    def encode(self, edge_index, edge_type, node_type, edge_drop=0.0):
-        if self.training and edge_drop > 0 and edge_index.numel() > 0:
-            keep = torch.rand(edge_index.size(1), device=edge_index.device) >= edge_drop
-            if int(keep.sum()) > 0:
-                edge_index = edge_index[:, keep]
-                edge_type = edge_type[keep]
-        h = self.emb.weight + self.type_emb(node_type)
-        parts = [h]
-        for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
-            msg = norm(conv(h, edge_index, edge_type))
-            parts.append(msg)
-            h = h + msg
-            if i + 1 < self.n_layers:
-                h = self.drop(F.gelu(h))
-        return self.final(self.proj(torch.cat(parts, dim=-1)))
-
-    def score_candidates(self, hidden, heads, rel_id, candidates):
-        """Cosine against every candidate. Shared across drugs, so AUPRC is meaningful.
-
-        A free diagonal relation stretches some drugs' scores above other drugs'
-        true hits and drops global AUPRC even when each drug is ranked correctly.
-        `rel_id` is unused; auxiliary relations still use `score_pairs`.
-        """
-        del rel_id
-        h = F.normalize(hidden[heads], dim=-1)
-        c = F.normalize(hidden[candidates], dim=-1)
-        return h @ c.transpose(0, 1)
-
-    def score_pairs(self, hidden, heads, rels, tails):
-        h = F.normalize(hidden[heads], dim=-1)
-        rel = self.rel[rels]
-        t = F.normalize(hidden[tails], dim=-1)
-        if t.dim() == 2:
-            return (h * rel * t).sum(-1)
-        return (h.unsqueeze(1) * rel.unsqueeze(1) * t).sum(-1)
+    if not any(channel.name == "gene" for channel in channels):
+        print("warning: no direct drug–gene–disease channel. Check DRG-GEN and DIS-GEN edges.", flush=True)
+    return channels
 
 
 def build_message_graph(src, dst, rid, undirected, edge_index_pool, blocked_rids, n_rels):
@@ -195,31 +405,6 @@ def pair_mask(heads, pos_idx, known_heads, known_pos, n_cand):
     mask[rows, known_pos[cols]] = True
     mask[torch.arange(heads.shape[0], device=heads.device), pos_idx] = False
     return mask
-
-
-def indication_loss(scores, pos_idx, neg_mask, alpha=1.0, gamma=0.0, uniform=0.25):
-    """Self-adversarial logistic loss, plus a uniform BCE term for AUPRC.
-
-    `scores` is [batch, candidates], higher is better. `neg_mask` is true where
-    a candidate must be ignored (another true indication of the same drug).
-    """
-    batch = torch.arange(scores.shape[0], device=scores.device)
-    pos = scores[batch, pos_idx]
-    finite = ~neg_mask
-    finite[batch, pos_idx] = False
-    weights_in = scores.masked_fill(~finite, -1e4)
-    weights = torch.softmax(alpha * weights_in, dim=1) * finite.float()
-    weights = weights / weights.sum(dim=1, keepdim=True).clamp(min=1e-12)
-    loss_pos = -F.logsigmoid(pos + gamma)
-    neg_in = torch.where(finite, scores, torch.zeros_like(scores))
-    loss_neg = -(weights * F.logsigmoid(-(neg_in + gamma))).sum(dim=1)
-    loss = (loss_pos + loss_neg).mean()
-    if uniform <= 0:
-        return loss
-    bce_pos = F.binary_cross_entropy_with_logits(pos, torch.ones_like(pos))
-    bce_neg = F.binary_cross_entropy_with_logits(neg_in, torch.zeros_like(neg_in), reduction="none")
-    bce_neg = (bce_neg * finite.float()).sum() / finite.float().sum().clamp(min=1)
-    return loss + uniform * (bce_pos + bce_neg)
 
 
 def average_precision(labels, scores):

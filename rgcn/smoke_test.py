@@ -1,8 +1,8 @@
 """Prove the trainer can rank a drug–disease link that is only visible through a gene.
 
 The graph is synthetic and small. Each drug treats the disease that shares its
-target gene. Indication edges are held out of message passing, which is the
-same rule as the real run. AUPRC, MRR and Hits have to land well above chance.
+target gene. Indication edges are held out of the score, which is the same
+rule as the real run. AUPRC, MRR and Hits have to land well above chance.
 """
 import sys
 import tempfile
@@ -12,8 +12,52 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from model import average_precision, build_message_graph
+from model import PathRanker, average_precision, build_message_graph, build_overlap_channels
 from train_rgcn2 import parse_args, train
+
+
+def check_overlap_math():
+    """Drug shares a gene with disease A, and reaches disease B only through a second gene.
+
+    The indication edge is in the pool and must not create a score by itself.
+    Disease A also shares the pathway of the drug's target. Disease B does not.
+    """
+    # 0 drug, 1 gene, 2 gene, 3 disease A, 4 disease B, 5 pathway of gene 1
+    src = torch.tensor([0, 3, 1, 4, 0, 1])
+    dst = torch.tensor([1, 1, 2, 2, 3, 5])
+    rid = torch.tensor([0, 1, 2, 1, 3, 4])
+    node_type = torch.tensor([0, 1, 1, 2, 2, 3])
+    rel_names = [
+        "DRG-GEN|TARGET", "DIS-GEN|ASSOC", "GEN-GEN|INTERACTS",
+        "DRG-DIS|INDICATION", "PWY-GEN|IN",
+    ]
+    type_names = ["DRG", "GEN", "DIS", "PWY"]
+    dis_ids = torch.tensor([3, 4])
+    pool = torch.arange(src.numel())
+    channels = build_overlap_channels(
+        src, dst, rid, pool, node_type, type_names, rel_names, dis_ids, 6,
+    )
+    by_name = {channel.name: channel for channel in channels}
+    missing = {"gene", "gene2", "pathway"} - set(by_name)
+    if missing:
+        raise SystemExit(f"missing channels {missing}, got {list(by_name)}")
+    drug = torch.tensor([0])
+    gene_scores = by_name["gene"].score(drug)
+    two_scores = by_name["gene2"].score(drug)
+    path_scores = by_name["pathway"].score(drug)
+    if not (float(gene_scores[0, 0]) > 0 and float(gene_scores[0, 1]) == 0):
+        raise SystemExit(f"direct gene score should hit only disease A, got {gene_scores}")
+    if not (float(two_scores[0, 1]) > 0 and float(two_scores[0, 0]) == 0):
+        raise SystemExit(f"2-hop gene score should hit only disease B, got {two_scores}")
+    if not (float(path_scores[0, 0]) > 0 and float(path_scores[0, 1]) == 0):
+        raise SystemExit(f"pathway score should hit only disease A, got {path_scores}")
+    model = PathRanker(channels, dis_ids)
+    combined = model.score_candidates(drug, dis_ids)
+    if not (float(combined[0, 0]) > float(combined[0, 1])):
+        raise SystemExit(f"the direct gene should outrank the 2-hop disease, got {combined}")
+    combined.sum().backward()
+    if by_name["gene"].logit.grad is None:
+        raise SystemExit("overlap weights did not receive a gradient")
 
 
 def check_average_precision():
@@ -251,6 +295,7 @@ def check_prep(root):
 
 if __name__ == "__main__":
     torch.manual_seed(0)
+    check_overlap_math()
     check_average_precision()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
