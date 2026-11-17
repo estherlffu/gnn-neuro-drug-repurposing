@@ -4,33 +4,30 @@
 #SBATCH --partition=hopperday
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64GB
-#SBATCH --time=12:00:00
+#SBATCH --time=8:00:00
 
-# Baseline: same trainer and indication split, without the seed neighborhood cut.
-# Anatomy expression and drug-drug edges are still dropped. Results go to
-# artifacts/baseline so they do not overwrite the pruned run.
-#
-#   DATA_DIR=/path/to/parquet bash rgcn/test_baseline.sh
-#   FORCE=1 rebuilds okg_split.pt
-set -euo pipefail
+cd ..
+source project/bin/activate
 
-if [ -f /local/scratch/kkim636/miniconda3/etc/profile.d/conda.sh ]; then
-  source /local/scratch/kkim636/miniconda3/etc/profile.d/conda.sh
-  conda activate kg
-elif [ -n "${CONDA_SH:-}" ]; then
-  source "$CONDA_SH"
-  conda activate "${CONDA_ENV:-kg}"
-fi
-
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
-OUT="${OUT_DIR:-artifacts/baseline}"
+DATA="$PWD"
+OUT="$PWD/artifacts/baseline"
 mkdir -p "$OUT"
 
-if [ ! -f "$OUT/okg_split.pt" ] || [ "${FORCE:-0}" = 1 ]; then
-  python -u rgcn/prep.py --data_dir "${DATA_DIR:-.}" --out_dir "$OUT" --no_prune --force
-fi
+echo "1/2  Building the baseline graph from $DATA"
+python -u rgcn/prep.py \
+  --data_dir "$DATA" \
+  --out_dir "$OUT" \
+  --no_prune \
+  --force
 
-python -u rgcn/train_rgcn2.py --split "$OUT/okg_split.pt" --out_dir "$OUT" \
-  --tag baseline --steps "${STEPS:-5000}" --eval_every "${EVAL_EVERY:-250}" \
-  --patience "${PATIENCE:-10}" --eval_test
+echo "2/2  Training, then scoring the held-out test edges"
+python -u rgcn/train_rgcn2.py \
+  --split "$OUT/okg_split.pt" \
+  --out_dir "$OUT" \
+  --tag baseline \
+  --steps 5000 \
+  --eval_every 250 \
+  --patience 10 \
+  --eval_test
+
+echo "Done. Scores are in $OUT/res_baseline.json"

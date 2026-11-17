@@ -6,31 +6,27 @@
 #SBATCH --mem=64GB
 #SBATCH --time=08:00:00
 
-# Pruned: the seed neighborhood (neurodegenerative diseases, their genes and
-# pathways, and the drugs that touch those genes). Same trainer and split
-# fractions as test_baseline.sh. Results go to artifacts/pruned.
-#
-#   DATA_DIR=/path/to/parquet bash rgcn/test_pruned.sh
-#   FORCE=1 rebuilds okg_split.pt
-set -euo pipefail
+cd ..
+source project/bin/activate
 
-if [ -f /local/scratch/kkim636/miniconda3/etc/profile.d/conda.sh ]; then
-  source /local/scratch/kkim636/miniconda3/etc/profile.d/conda.sh
-  conda activate kg
-elif [ -n "${CONDA_SH:-}" ]; then
-  source "$CONDA_SH"
-  conda activate "${CONDA_ENV:-kg}"
-fi
-
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
-OUT="${OUT_DIR:-artifacts/pruned}"
+DATA="$PWD"
+OUT="$PWD/artifacts/pruned"
 mkdir -p "$OUT"
 
-if [ ! -f "$OUT/okg_split.pt" ] || [ "${FORCE:-0}" = 1 ]; then
-  python -u rgcn/prep.py --data_dir "${DATA_DIR:-.}" --out_dir "$OUT" --force
-fi
+echo "1/2  Building the pruned graph from $DATA"
+python -u rgcn/prep.py \
+  --data_dir "$DATA" \
+  --out_dir "$OUT" \
+  --force
 
-python -u rgcn/train_rgcn2.py --split "$OUT/okg_split.pt" --out_dir "$OUT" \
-  --tag pruned --steps "${STEPS:-5000}" --eval_every "${EVAL_EVERY:-250}" \
-  --patience "${PATIENCE:-10}" --eval_test
+echo "2/2  Training, then scoring the held-out test edges"
+python -u rgcn/train_rgcn2.py \
+  --split "$OUT/okg_split.pt" \
+  --out_dir "$OUT" \
+  --tag pruned \
+  --steps 5000 \
+  --eval_every 250 \
+  --patience 10 \
+  --eval_test
+
+echo "Done. Scores are in $OUT/res_pruned.json"
