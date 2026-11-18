@@ -14,14 +14,14 @@ OUT="$PWD/artifacts/baseline"
 mkdir -p "$OUT"
 
 echo "1/2  Building the baseline graph from $DATA"
-python -u rgcn/prep.py \
+python -u rgcn/baseline_ef1.py \
   --data_dir "$DATA" \
   --out_dir "$OUT" \
   --no_prune \
   --force
 
 echo "2/2  Training, then scoring the held-out test edges"
-python -u rgcn/train_rgcn2.py \
+python -u rgcn/train_rgcn_base_ef1.py \
   --split "$OUT/okg_split.pt" \
   --out_dir "$OUT" \
   --tag baseline \
