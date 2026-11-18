@@ -1,0 +1,1 @@
+python ./rgcn/pruning_ef1.py

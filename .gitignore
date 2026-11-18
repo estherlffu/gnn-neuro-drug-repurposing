@@ -1,4 +1,5 @@
 .venv/
+<<<<<<< HEAD
 .venv-pip/
 *.pt
 *.parquet
@@ -9,3 +10,19 @@ artifacts/
 .cache/
 meta.json
 !rgcn/keep/*.parquet
+=======
+*.parquet
+>>>>>>> cedb9b3 (Add gitignore)
+*.parquet
+*.parquet
+*.parquet
+
+# Local SSH credentials
+/github_key
+/github_key.pub
+
+# Generated SLURM logs
+/rgcn/logs/
+
+# Large generated data files
+*.parquet
